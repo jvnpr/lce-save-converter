@@ -4,12 +4,16 @@ import zlib
 import argparse
 import os
 
-def decompress(data): # decompress saveData.ms using zlib 
+def decompress(data,endianness): # decompress saveData.ms using zlib 
 
     if len(data) < 8:
         raise ValueError("File must be at least 8 bytes long")
+    
+    if endianness == "little":
+        headerPadding, decompressSize = struct.unpack("<II", data[:8]) # read in first 8 bytes as two unsigned ints.
+    else:
+        headerPadding, decompressSize = struct.unpack(">II", data[:8])
 
-    headerPadding, decompressSize = struct.unpack("<II", data[:8]) # read in first 8 bytes as two unsigned ints.
 
     print(f"Header Zeros: {headerPadding}") # should be 0
     print(f"Decompress Size: {decompressSize}") # should be decompressed size
@@ -18,6 +22,7 @@ def decompress(data): # decompress saveData.ms using zlib
     decompressed = zlib.decompress(compressed)
 
     print(f"Decompressed {len(decompressed)} bytes")
+    print("")
 
     return decompressed
 
@@ -33,6 +38,7 @@ def LittleToBig(data): # import little endian format and convert to big endian f
     if tableOffset < saveSize and numEntries > 0 and numEntries < 10000 and tableOffset + numEntries * entrySize <= saveSize:
 
         print(f"found {numEntries} entries in table at {hex(tableOffset)}")
+        print("")
 
         for i in range(numEntries):
             entryOffset = tableOffset + i * entrySize
@@ -43,14 +49,36 @@ def LittleToBig(data): # import little endian format and convert to big endian f
             fileOffset = struct.unpack("<I", tableEntry[132:136])[0]
             fileLastModified = struct.unpack("<Q", tableEntry[136:144])[0]
 
-            newFile = struct.pack(">128sIIQ", fileName.decode('utf-16-le').encode('utf-16-be'), fileLength, fileOffset, fileLastModified)
+            print(f"At {hex(entryOffset)}, found table entry for:")
+            print(f"Name:               {fileName.decode('utf-16-le')}")
+            print(f"Length:             {fileLength} bytes")
+            print(f"Position In File:   {hex(fileOffset)}")
+            print(f"Last Modified:      {fileLastModified}")
 
-            saveData[entryOffset:entryOffset + entrySize] = newFile
+            newFileEntry = struct.pack(">128sIIQ", fileName.decode('utf-16-le').encode('utf-16-be'), fileLength, fileOffset, fileLastModified)
+
+            print(f"Writing new table entry at {hex(entryOffset)}.")
+            print("")
+
+            saveData[entryOffset:entryOffset + entrySize] = newFileEntry
 
         saveData[:8] = struct.pack(">II", tableOffset, numEntries)
         saveData[8:12] = struct.pack(">HH", minVersion, currVersion)
 
         return saveData
+    
+    else:
+
+        print(f"DEBUG: {numEntries}")
+
+        if tableOffset > saveSize:
+            print("Error: table out of bounds.")
+            
+        
+        if tableOffset + numEntries * entrySize <= saveSize:
+            print("Error: table does not reach to end of file.")
+
+        raise ValueError(f"Did not pass file checks.")
 
 def BigToLittle(data): # convert big endian format to little endian
 
@@ -65,6 +93,7 @@ def BigToLittle(data): # convert big endian format to little endian
     if tableOffset < saveSize and numEntries > 0 and numEntries < 10000 and tableOffset + numEntries * entrySize <= saveSize:
 
         print(f"found {numEntries} entries in table at {hex(tableOffset)}")
+        print("")
 
         for i in range(numEntries):
             entryOffset = tableOffset + i * entrySize
@@ -75,23 +104,52 @@ def BigToLittle(data): # convert big endian format to little endian
             fileOffset = struct.unpack(">I", tableEntry[132:136])[0]
             fileLastModified = struct.unpack(">Q", tableEntry[136:144])[0]
 
-            newFile = struct.pack(">128sIIQ", fileName.decode('utf-16-be').encode('utf-16-le'), fileLength, fileOffset, fileLastModified)
+            print(f"At {hex(entryOffset)}, found table entry for:")
+            print(f"Name:               {fileName.decode('utf-16-be')}")
+            print(f"Length:             {fileLength} bytes")
+            print(f"Position In File:   {hex(fileOffset)}")
+            print(f"Last Modified:      {fileLastModified}")
 
-            saveData[entryOffset:entryOffset + entrySize] = newFile
+            newFileEntry = struct.pack("<128sIIQ", fileName.decode('utf-16-be').encode('utf-16-le'), fileLength, fileOffset, fileLastModified)
+
+            print(f"Writing new table entry at {hex(entryOffset)}.")
+            print("")
+
+            saveData[entryOffset:entryOffset + entrySize] = newFileEntry
 
         saveData[:8] = struct.pack("<II", tableOffset, numEntries)
         saveData[8:12] = struct.pack("<HH", minVersion, currVersion)
 
         return saveData
+    
+    else:
 
-def compress(data): # compress data using zlib 
+        print(f"DEBUG: {numEntries}")
+
+        if tableOffset > saveSize:
+            print("Error: table out of bounds.")
+            
+        
+        if tableOffset + numEntries * entrySize <= saveSize:
+            print("Error: table does not reach to end of file.")
+
+        raise ValueError(f"Did not pass file checks.")
+
+def compress(data,endianness): # compress data using zlib 
 
     headerPadding = 0
     decompressSize = len(data)
+    print("New Header:")
+    print(f"Header zeros: {headerPadding}")
+    print(f"Decompress Size: {decompressSize}")
+    print("")
 
     zlibCompressed = zlib.compress(data)
 
-    header = struct.pack(">II", headerPadding, decompressSize)
+    if endianness == "little":
+        header = struct.pack("<II", headerPadding, decompressSize)
+    else:
+        header = struct.pack(">II", headerPadding, decompressSize)
 
     savegame = header + zlibCompressed
 
@@ -112,15 +170,33 @@ if __name__ == "__main__":
         with open(args.file, "rb") as f:
             data = f.read()
 
+        saveData = decompress(data, "big")
+
+        try:
+            convertedSaveData = BigToLittle(saveData)
+        except ValueError as e:
+            print(f"Error: {e}")
+
+        outputSaveData = compress(convertedSaveData, "little")
+
         with open("saveData.ms", "wb") as f:
-            f.write(compress(BigToLittle(decompress(data))))
+            f.write(outputSaveData)
 
     elif args.to_wii:
         with open(args.file, "rb") as f:
             data = f.read()
+
+        saveData = decompress(data, "little")
+
+        try:
+            convertedSaveData = LittleToBig(saveData)
+        except ValueError as e:
+            print(f"Error: {e}")
+        
+        outputSaveData = compress(convertedSaveData, "big")
         
         with open("savegame.wii", "wb") as f:
-            f.write(compress(LittleToBig(decompress(data))))
+            f.write(outputSaveData)
 
     else:
         print("Not enough arguments.")
